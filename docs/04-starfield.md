@@ -86,7 +86,7 @@ Array of N_STARS stars packed together:
 
 ```nasm
 N_STARS  equ  200
-stars    dw   N_STARS * 3 dup(0)   ; 200 stars × 3 words
+stars    times N_STARS * 3 dw 0    ; 200 stars × 3 words
 ```
 
 ---
@@ -167,6 +167,65 @@ for i = 1 to 63:
 ```
 
 For a blue-tinted starfield change to `R = i/2, G = i/2, B = i`.
+
+---
+
+## Pitfalls
+
+### 1. `dup` is not NASM syntax
+
+MASM/TASM use `dup`. NASM uses `times`:
+
+```nasm
+; wrong (MASM syntax)
+stars dw N_STARS * 3 dup(0)
+
+; correct (NASM syntax)
+stars times N_STARS * 3 dw 0
+```
+
+### 2. Two-operand `imul` overflows
+
+`imul ax, FOV` gives a 16-bit truncated result. With X up to 16384 and FOV=200,
+the product is 3,276,800 — way beyond 16-bit range (max 32767 signed).
+
+Use the **single-operand** form instead, which puts the full 32-bit result in `DX:AX`:
+
+```nasm
+mov  bx, FOV
+imul bx          ; DX:AX = AX * FOV  (no overflow)
+```
+
+Then divide the 32-bit result by 64 using `sar`/`rcr` pairs (one pair = one right shift
+of the combined DX:AX value, carry flowing from DX into AX):
+
+```nasm
+sar  dx, 1
+rcr  ax, 1       ; repeat 6 times to divide by 64
+```
+
+### 3. `idiv` uses DX as part of the dividend
+
+`idiv reg` divides **DX:AX** by the operand. If you put Z in DX and then call
+`idiv dx`, you are dividing by your own dividend's high word — immediate CPU fault.
+
+Keep Z in `SI` or `DI` so it is never touched by the divide instruction.
+
+### 4. Divide overflow when Z is small
+
+`idiv` faults if the quotient doesn't fit in signed 16-bit (-32768 to 32767).
+With Z=1 and a large X: 51200 / 1 = 51200 → overflow fault.
+
+Fix: reset the star before Z gets small enough to cause this. In `move_star`,
+reset when Z <= 8 rather than Z <= 0:
+
+```nasm
+move_star:
+    sub  word [stars + 4], STAR_SPEED
+    cmp  word [stars + 4], 8
+    jg   .done
+    ; reset star...
+```
 
 ---
 

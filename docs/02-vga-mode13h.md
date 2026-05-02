@@ -117,6 +117,15 @@ In a demo you typically:
 
 This gives you smooth, tear-free animation.
 
+### Common mistake
+
+The two-phase wait (end of retrace, then start of retrace) is easy to get wrong.
+The first loop uses `jnz` (loop while bit 3 IS set = still in retrace).
+The second loop uses `jz` (loop while bit 3 is NOT set = retrace hasn't started yet).
+
+Using `jnz` for both loops sends the second loop back to the first when retrace
+starts — you never actually sync and the routine may never return cleanly.
+
 ---
 
 ## Fast Buffer Copy
