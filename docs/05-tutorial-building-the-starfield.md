@@ -200,10 +200,12 @@ Since erase happens before move, it uses the same Z as the previous draw.
 
 ```nasm
 move_star:
-    sub  word [stars + 4], STAR_SPEED
-    cmp  word [stars + 4], 8    ; reset before Z gets too small
+    mov  bx, [star_offset]
+    sub  word [stars + bx + 4], STAR_SPEED
+    cmp  word [stars + bx + 4], 8    ; reset before Z gets too small
     jg   .done
     ; ... assign new random X, Y and reset Z to MAX_Z
+    mov  word [stars + bx + 4], MAX_Z   ; always use bx, not [stars + 4]!
 ```
 
 The minimum Z threshold (8) is important. `idiv` faults if the quotient
@@ -239,11 +241,105 @@ The second loop must use `jz`.
 
 ---
 
+---
+
+## Step 5 — Full Starfield: 200 Stars
+
+**Goal**: initialise all 200 stars and loop over them every frame.
+
+### Staggered Z on init
+
+If all stars start at Z=MAX_Z they all appear at once from the back — one
+expanding ring, not a field. Randomise Z too so stars are spread across all
+depths from the first frame:
+
+```nasm
+init_stars:
+    mov  cx, N_STARS
+    mov  si, 0
+.loop:
+    call rand
+    sub  ax, 3FFFh
+    mov  [stars + si], ax        ; X
+
+    call rand
+    sub  ax, 3FFFh
+    mov  [stars + si + 2], ax    ; Y
+
+    call rand
+    and  ax, 7Fh
+    add  ax, 20                  ; Z in range 20..147 (staggered)
+    mov  [stars + si + 4], ax
+
+    add  si, 6                   ; advance to next star (3 words = 6 bytes)
+    loop .loop
+    ret
+```
+
+### The `loop`/CX clobbering crash
+
+The natural instinct for iterating 200 stars is:
+
+```nasm
+mov  cx, N_STARS
+.star_loop:
+    call erase_star
+    call move_star
+    call draw_star
+    add  si, 6
+    loop .star_loop          ; decrements CX, jumps if CX != 0
+```
+
+This crashes. `draw_star` and `erase_star` both do `mov cx, [stars + bx + 2]`
+to load the star's Y coordinate — which overwrites CX with a Y value. After
+the first star, `loop` is counting down from a Y coordinate (something like
+12000), not from 200. The loop runs thousands of iterations beyond the stars
+array, reads garbage Z values, hits Z=0, and crashes with interrupt 0
+(divide fault).
+
+**The fix**: drive the loop from the `star_offset` memory variable instead.
+No CX involved at all:
+
+```nasm
+    mov  word [star_offset], 0
+.star_loop:
+    call erase_star
+    call move_star
+    call draw_star
+    add  word [star_offset], 6
+    cmp  word [star_offset], N_STARS * 6
+    jl   .star_loop
+```
+
+The routines already read `[star_offset]` to know which star to process, so
+this works with zero changes to the subroutines.
+
+### The hardcoded offset bug in move_star
+
+When resetting a dead star, every memory access must use `bx` (loaded from
+`[star_offset]`). A hardcoded `[stars + 4]` always resets star 0's Z field
+no matter which star triggered the reset:
+
+```nasm
+; wrong — resets star 0 every time
+mov  word [stars + 4], MAX_Z
+
+; correct — resets the current star
+mov  word [stars + bx + 4], MAX_Z
+```
+
+With the wrong version, every star beyond star 0 that dies keeps its Z stuck
+at ≤ 8 permanently. It subtracts STAR_SPEED each frame: 6, 4, 2, 0.
+At Z=0, `idiv si` → divide by zero → crash.
+
+---
+
 ## What's Next
 
-- **Step 5**: expand `init_stars` and the main loop to handle all 200 stars
-- **Step 6**: add depth-based color (use `(MAX_Z - Z) / 4 + 1` as the palette index)
-- **Future**: replace erase/draw with a full backbuffer + `rep movsw` for flicker-free animation
+- **Step 6**: depth-based color — use `(MAX_Z - Z) / 4 + 1` as the palette
+  index so distant stars are dim and close stars are bright
+- **Future**: replace per-pixel erase/draw with a full backbuffer +
+  `rep movsw` for flicker-free animation
 
 ---
 

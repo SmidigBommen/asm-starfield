@@ -217,15 +217,52 @@ Keep Z in `SI` or `DI` so it is never touched by the divide instruction.
 With Z=1 and a large X: 51200 / 1 = 51200 → overflow fault.
 
 Fix: reset the star before Z gets small enough to cause this. In `move_star`,
-reset when Z <= 8 rather than Z <= 0:
+reset when Z <= 8 rather than Z <= 0. Use the base pointer `bx` from
+`star_offset` — not a hardcoded offset:
 
 ```nasm
 move_star:
-    sub  word [stars + 4], STAR_SPEED
-    cmp  word [stars + 4], 8
+    mov  bx, [star_offset]
+    sub  word [stars + bx + 4], STAR_SPEED
+    cmp  word [stars + bx + 4], 8
     jg   .done
     ; reset star...
+    mov  word [stars + bx + 4], MAX_Z   ; bx! not hardcoded
 ```
+
+### 5. `loop` uses CX — don't let subroutines clobber it
+
+The `loop` instruction decrements CX and jumps if CX != 0. If any subroutine
+called inside the loop modifies CX, the loop counter is silently corrupted.
+
+`draw_star` and `erase_star` both do `mov cx, [stars + bx + 2]` to load Y.
+Using `loop` for the star iteration means CX becomes a Y coordinate after
+the first star — the loop runs wild, accesses memory beyond the stars array,
+eventually hits Z=0, and crashes with a divide fault.
+
+Fix: drive the loop from `star_offset` in memory instead:
+
+```nasm
+    mov  word [star_offset], 0
+.star_loop:
+    call erase_star
+    call move_star
+    call draw_star
+    add  word [star_offset], 6
+    cmp  word [star_offset], N_STARS * 6
+    jl   .star_loop
+```
+
+No CX involved. The routines already read `[star_offset]` themselves.
+
+### 6. Hardcoded star offset in reset code
+
+When `move_star` resets a star it must write to the *current* star's fields.
+A hardcoded `[stars + 4]` always resets star 0's Z regardless of which star
+is being processed. Every other star that dies keeps Z stuck at ≤ 8 forever,
+eventually hitting zero and causing a divide fault.
+
+Always use `[stars + bx + N]` where BX comes from `[star_offset]`.
 
 ---
 
