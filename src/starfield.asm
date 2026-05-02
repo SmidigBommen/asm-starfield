@@ -28,9 +28,20 @@ start:
   int 16h       ; sets ZF if no key waiting
   jnz .done     ; key pressed - exit loop
   
+  ; mov cx, N_STARS
+  ; mov si, 0 
+  mov word  [star_offset], 0 
+.star_loop:
+  ; mov [star_offset], si
   call erase_star
   call move_star
   call draw_star
+  ; add si, 6
+  add word [star_offset], 6
+  cmp word [star_offset], N_STARS * 6 
+  ; loop .star_loop
+  jl  .star_loop
+
   call wait_vsync
   jmp .mainloop
 
@@ -75,23 +86,34 @@ rand:
 
 ; --- init star 0 only ---
 init_stars:
+  mov cx, N_STARS
+  mov si, 0 
+.loop:
   call rand
   sub ax, 3FFFh         ; shift range to -16383..+16383
-  mov [stars + 0],  ax  ; X 
+  mov [stars + si],  ax  ; X 
 
   call rand
   sub ax, 3FFFh
-  mov [stars + 2], ax    ; Y 
+  mov [stars + si + 2], ax    ; Y 
 
-  mov word  [stars + 4],  MAX_Z ; Z = far away
+  call rand 
+  and ax, 7Fh 
+  add ax, 20                  ; Z in range 20..147
+  mov [stars + si + 4],  ax   ; Z = far away
+  
+  add si, 6                   ; next star (3 words = 6 bytes)
+  loop .loop
   ret
 
 ; --- project and draw star 0 ---
 draw_star:
   ; load X,Y,Z  
-  mov bx, [stars + 0]
-  mov cx, [stars + 2]
-  mov si, [stars + 4]
+  mov bx, [star_offset]
+  mov ax, [stars + bx]
+  mov cx, [stars + bx + 2]
+  mov si, [stars + bx + 4]
+  mov bx, ax
 
   ; screen_x = (X * FOV) / (Z * 64) + CENTER_X
   mov   ax, bx
@@ -145,10 +167,11 @@ draw_star:
   ret 
 
 erase_star:
-  ; --- project and draw star 0 ---
-  mov bx, [stars + 0]
-  mov cx, [stars + 2]
-  mov si, [stars + 4]
+  mov bx, [star_offset]
+  mov ax, [stars + bx]
+  mov cx, [stars + bx + 2]
+  mov si, [stars + bx + 4]
+  mov bx, ax
 
   ; screen_x = (X * FOV) / (Z * 64) + CENTER_X
   mov   ax, bx
@@ -203,20 +226,21 @@ erase_star:
 ; ---
 
 move_star:
-  sub word [stars + 4], STAR_SPEED
-  cmp word [stars + 4], 8   ; reset before Z gets close enough to cause overflow
+  mov bx, [star_offset]
+  sub word [stars + bx + 4], STAR_SPEED
+  cmp word [stars + bx + 4], 8   ; reset before Z gets close enough to cause overflow
   jg  .done
 
   ; reset star at back 
   call rand
   sub ax, 3FFFh
-  mov [stars + 0],  ax    ; new x 
+  mov [stars + bx],  ax    ; new x 
 
   call rand
   sub ax, 3FFFh
-  mov [stars + 2],  ax    ; new y 
+  mov [stars + bx + 2],  ax    ; new y 
 
-  mov word  [stars + 4],  MAX_Z
+  mov word  [stars + bx + 4],  MAX_Z
 
 .done:
   ret
@@ -230,10 +254,12 @@ wait_vsync:
 .blank:
   in    al, dx
   test  al, 08h 
-  jnz .blank
+  jz .blank
   ret
 
 
 ; == data section (in same segment) ==
   stars times   N_STARS * 3 dw 0 ; 200 stars * 3 words..
   rand_seed     dw  0ACEh ; any non-zero number
+  star_offset   dw  0 
+
